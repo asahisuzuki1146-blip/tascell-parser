@@ -108,8 +108,8 @@ java -cp $CLASSPATH:src Main < src/fib.tc | java -cp $CLASSPATH:src SCMain
 | `fib_full.tc` | グローバル変数・確率関数込みの完全版フィボナッチ |
 | `nq.tc` | N クイーン問題（配列・ネストした for ループ） |
 | `ctest.tc` | 通常の C 関数 + worker 関数の混在 |
-| `ctest2.tc` | ポインタ・配列・文字列リテラルを含む worker |
-| `task_test.tc` | `task` / `task_exec` の最小構成 |
+| `ctest2.tc` | ポインタ・配列・文字列リテラルを含む worker (?)|
+| `task_test.tc` | `task` / `task_exec` の最小構成 (?)|
 
 ### 自分で .tc ファイルを書くとき
 
