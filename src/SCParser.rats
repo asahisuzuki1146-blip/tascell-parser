@@ -47,6 +47,7 @@ String TopForm =
   / DefTaskSender
   / RsltSender
   / RsltReceiver
+  / TaskExecForm
   / DeclForm
   / GlobalVarDef
   / DefFunc ;
@@ -121,6 +122,12 @@ String RsltReceiver =
     ")" Spacing
     { String b = body.trim(); yyValue = "rslt_receiver " + name + " {\n" + (b.isEmpty() ? "" : "    " + b + "\n") + "}"; } ;
 
+String TaskExecForm =
+    "(" Spacing "task-exec" Spacing name:Atom
+    body:FormList
+    ")" Spacing
+    { String b = body.trim(); yyValue = "task_exec " + name + " {\n" + (b.isEmpty() ? "" : "    " + b + "\n") + "}"; } ;
+
 String DefWorker =
     "(" Spacing "def" Spacing
     "(" Spacing name:Atom params:AtomList ")" Spacing
@@ -167,6 +174,8 @@ String Form =
   / CastForm
   / IncrForm
   / DecrForm
+  / AddrForm
+  / DerefForm
   / CallForm
   / Atom ;
 
@@ -182,7 +191,9 @@ String FrefForm =
     { yyValue = obj + "." + field.replace("-", "_"); } ;
 
 String ArefForm =
-    "(" Spacing "aref" Spacing arr:Atom idx:Form ")" Spacing
+    "(" Spacing "aref" Spacing arr:ArefForm idx:Form ")" Spacing
+    { yyValue = arr + "[" + idx + "]"; }
+  / "(" Spacing "aref" Spacing arr:Atom idx:Form ")" Spacing
     { yyValue = arr + "[" + idx + "]"; } ;
 
 String CastForm =
@@ -196,6 +207,14 @@ String IncrForm =
 String DecrForm =
     "(" Spacing "--" Spacing e:Atom ")" Spacing
     { yyValue = "--" + e; } ;
+
+String AddrForm =
+    "(" Spacing "addr" Spacing e:Form ")" Spacing
+    { yyValue = "&" + e; } ;
+
+String DerefForm =
+    "(" Spacing "deref" Spacing e:Form ")" Spacing
+    { yyValue = "*" + e; } ;
 
 String TypeAtom =
     h:[a-zA-Z_] t:[a-zA-Z0-9_]* Spacing { yyValue = h + flatten(t); } ;
@@ -218,7 +237,15 @@ String BeginForm =
       sb.append("{\n");
       for (String s : stmts.trim().split("\n(?=\\S)")) {
         String t = s.trim();
-        if (!t.isEmpty()) sb.append(indent()).append("    ").append(t).append("\n");
+        if (t.isEmpty()) continue;
+        // ブロック末尾の文には ; を補う。ただしすでに ; がある、または
+        // 制御構造（do_two, if, while, for, {}ブロック）はセミコロン不要
+        boolean needsSemi = !t.endsWith(";") && !t.endsWith("}")
+            && !t.startsWith("do_two") && !t.startsWith("if ")
+            && !t.startsWith("while ") && !t.startsWith("for ");
+        sb.append(indent()).append("    ").append(t);
+        if (needsSemi) sb.append(";");
+        sb.append("\n");
       }
       sb.append(indent()).append("}");
       yyValue = sb.toString(); } ;
@@ -249,6 +276,8 @@ String DefVarForm =
 
 String AssignForm =
     "(" Spacing "=" Spacing lhs:ArefForm rhs:Form ")" Spacing
+    { yyValue = lhs + " = " + rhs; }
+  / "(" Spacing "=" Spacing lhs:DerefForm rhs:Form ")" Spacing
     { yyValue = lhs + " = " + rhs; }
   / "(" Spacing "=" Spacing lhs:Atom rhs:Form ")" Spacing
     { yyValue = lhs + " = " + rhs; } ;
