@@ -43,3 +43,13 @@ java xtc.core.Tool --version
 | `src/` | ホスト側の作業フォルダ。ここに `.rats` 文法や `.tc` ファイルを置く |
 | `/workspace/src/` | コンテナ内から見た同じフォルダ |
 | `/opt/superc/xtc/` | Rats!/xtc 本体（参照用） |
+
+##　使用手順
+以下の手順で環境を使えます
+
+```bash
+git clone https://github.com/asahisuzuki1146-blip/tascell-parser.git
+cd tascell-parser
+docker compose build
+docker compose run --rm tascell-parser
+```
