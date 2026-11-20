@@ -12,6 +12,9 @@ body {
     for (int i = 0; i < indentLevel; i++) sb.append("    ");
     return sb.toString();
   }
+  private String toC(String name) {
+    return name.replace("-", "_");
+  }
   private String zipParams(String names, String types) {
     String[] ns = names.trim().split("\\s+");
     String[] ts = types.trim().split("\\s+");
@@ -57,9 +60,9 @@ String GlobalVarDef =
 String DeclForm =
     "(" Spacing "decl" Spacing
     "(" Spacing name:Atom params:AtomList ")" Spacing
-    "(" Spacing "wfn" Spacing ret:Atom types:AtomList ")" Spacing
+    "(" Spacing "wfn" Spacing ret:TypeExpr types:TypeExprList ")" Spacing
     ")" Spacing
-    { yyValue = "decl " + ret + " " + name + "(" + zipParams(params, types) + ");"; }
+    { yyValue = "decl " + ret + " " + toC(name) + "(" + zipParams(params, types) + ");"; }
   / "(" Spacing "decl" Spacing name:Atom type:TypeExpr ")" Spacing
     { yyValue = type + " " + name + ";"; } ;
 
@@ -75,7 +78,7 @@ String TaskFieldList =
   / /* empty */                   { yyValue = ""; } ;
 
 String TaskField =
-    "(" Spacing "def" Spacing n:Atom t:Atom dir:TaskDir ")" Spacing
+    "(" Spacing "def" Spacing n:Atom t:TypeExpr dir:TaskDir ")" Spacing
     { yyValue = "    " + dir + " " + t + " " + n + ";\n"; } ;
 
 String TaskDir =
@@ -121,7 +124,7 @@ String RsltReceiver =
 String DefWorker =
     "(" Spacing "def" Spacing
     "(" Spacing name:Atom params:AtomList ")" Spacing
-    "(" Spacing "wfn" Spacing ret:Atom types:AtomList ")" Spacing
+    "(" Spacing "wfn" Spacing ret:TypeExpr types:TypeExprList ")" Spacing
     body:Form
     ")" Spacing
     { String b = body.startsWith("{") ? body : "{\n    " + body.trim() + "\n}"; yyValue = "worker " + ret + " " + name + "(" + zipParams(params, types) + ") " + b; } ;
@@ -154,6 +157,7 @@ String Form =
     IfForm
   / BeginForm
   / DoTwoForm
+  / ForForm
   / ReturnForm
   / DefVarForm
   / AssignForm
@@ -165,6 +169,13 @@ String Form =
   / DecrForm
   / CallForm
   / Atom ;
+
+String ForForm =
+    "(" Spacing "for" Spacing
+    "(" Spacing init:Form cond:Form step:Form ")" Spacing
+    body:Form
+    ")" Spacing
+    { yyValue = "for (" + init.replaceAll(";$","").trim() + "; " + cond.replaceAll(";$","").trim() + "; " + step.replaceAll(";$","").trim() + ") " + body; } ;
 
 String FrefForm =
     "(" Spacing "fref" Spacing obj:Form field:Atom ")" Spacing
@@ -237,7 +248,9 @@ String DefVarForm =
     { yyValue = type + " " + name + ";"; } ;
 
 String AssignForm =
-    "(" Spacing "=" Spacing lhs:Atom rhs:Form ")" Spacing
+    "(" Spacing "=" Spacing lhs:ArefForm rhs:Form ")" Spacing
+    { yyValue = lhs + " = " + rhs; }
+  / "(" Spacing "=" Spacing lhs:Atom rhs:Form ")" Spacing
     { yyValue = lhs + " = " + rhs; } ;
 
 String WhileForm =
