@@ -43,17 +43,3 @@ java xtc.core.Tool --version
 | `src/` | ホスト側の作業フォルダ。ここに `.rats` 文法や `.tc` ファイルを置く |
 | `/workspace/src/` | コンテナ内から見た同じフォルダ |
 | `/opt/superc/xtc/` | Rats!/xtc 本体（参照用） |
-
-## 開発の流れ
-
-```
-src/
-├── TascellC.rats   ← 拡張C文法（Rats! で書く）
-├── hello.tc        ← テスト用の拡張Cソース
-└── ...
-```
-
-1. `src/TascellC.rats` に文法を書く
-2. コンテナ内で `java xtc.parser.Rats src/TascellC.rats` を実行 → Java パーサが生成される
-3. `javac` でコンパイルして `src/hello.tc` をパース
-4. AST を走査して SC の S 式を出力
