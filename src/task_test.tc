@@ -1,0 +1,8 @@
+task myTask {
+    in: int x;
+    out: int result;
+};
+
+task_exec myTask {
+    result(x);
+}

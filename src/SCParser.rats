@@ -1,0 +1,301 @@
+module SCParser;
+
+body {
+  private String flatten(xtc.util.Pair<Character> cs) {
+    StringBuilder sb = new StringBuilder();
+    for (char c : cs) sb.append(c);
+    return sb.toString();
+  }
+  private int indentLevel = 0;
+  private String indent() {
+    StringBuilder sb = new StringBuilder();
+    for (int i = 0; i < indentLevel; i++) sb.append("    ");
+    return sb.toString();
+  }
+  private String zipParams(String names, String types) {
+    String[] ns = names.trim().split("\\s+");
+    String[] ts = types.trim().split("\\s+");
+    if (names.trim().isEmpty()) return "";
+    StringBuilder sb = new StringBuilder();
+    for (int i = 0; i < ns.length; i++) {
+      if (i > 0) sb.append(", ");
+      String t = i < ts.length ? ts[i] : "int";
+      sb.append(t).append(" ").append(ns[i]);
+    }
+    return sb.toString();
+  }
+}
+
+public String start =
+    Spacing ds:TopFormList EOF
+    { yyValue = ds.trim(); }
+  / Spacing f:Form EOF
+    { yyValue = f; } ;
+
+String TopFormList =
+    d:TopForm rest:TopFormList { yyValue = d + "\n\n" + rest; }
+  / /* empty */                { yyValue = ""; } ;
+
+String TopForm =
+    DefWorker
+  / DefTask
+  / DefTaskBody
+  / DefTaskReceiver
+  / DefTaskSender
+  / RsltSender
+  / RsltReceiver
+  / DeclForm
+  / GlobalVarDef
+  / DefFunc ;
+
+String GlobalVarDef =
+    "(" Spacing "def" Spacing name:Atom type:Atom init:Form ")" Spacing
+    { yyValue = type + " " + name + " = " + init + ";"; }
+  / "(" Spacing "def" Spacing name:Atom type:Atom ")" Spacing
+    { yyValue = type + " " + name + ";"; } ;
+
+String DeclForm =
+    "(" Spacing "decl" Spacing
+    "(" Spacing name:Atom params:AtomList ")" Spacing
+    "(" Spacing "wfn" Spacing ret:Atom types:AtomList ")" Spacing
+    ")" Spacing
+    { yyValue = "decl " + ret + " " + name + "(" + zipParams(params, types) + ");"; }
+  / "(" Spacing "decl" Spacing name:Atom type:TypeExpr ")" Spacing
+    { yyValue = type + " " + name + ";"; } ;
+
+String DefTask =
+    "(" Spacing "def" Spacing
+    "(" Spacing "task" Spacing name:Atom ")" Spacing
+    fields:TaskFieldList
+    ")" Spacing
+    { yyValue = "task " + name + " {\n" + fields + "};"; } ;
+
+String TaskFieldList =
+    f:TaskField rest:TaskFieldList { yyValue = f + rest; }
+  / /* empty */                   { yyValue = ""; } ;
+
+String TaskField =
+    "(" Spacing "def" Spacing n:Atom t:Atom dir:TaskDir ")" Spacing
+    { yyValue = "    " + dir + " " + t + " " + n + ";\n"; } ;
+
+String TaskDir =
+    ":in"  Spacing { yyValue = "in:"; }
+  / ":out" Spacing { yyValue = "out:"; }
+  / /* empty */    { yyValue = ""; } ;
+
+String DefTaskBody =
+    "(" Spacing "def" Spacing
+    "(" Spacing "task-body" Spacing name:Atom ")" Spacing
+    body:FormList
+    ")" Spacing
+    { String b = body.trim(); if (!b.endsWith(";")) b = b + ";"; yyValue = "task_body " + name + " {\n    " + b + "\n}"; } ;
+
+String DefTaskReceiver =
+    "(" Spacing "def" Spacing
+    "(" Spacing "task-receiver" Spacing name:Atom ")" Spacing
+    body:FormList
+    ")" Spacing
+    { String b = body.trim(); yyValue = "task_receiver " + name + " {\n" + (b.isEmpty() ? "" : "    " + b + "\n") + "}"; } ;
+
+String DefTaskSender =
+    "(" Spacing "def" Spacing
+    "(" Spacing "task-sender" Spacing name:Atom ")" Spacing
+    body:FormList
+    ")" Spacing
+    { String b = body.trim(); yyValue = "task_sender " + name + " {\n" + (b.isEmpty() ? "" : "    " + b + "\n") + "}"; } ;
+
+String RsltSender =
+    "(" Spacing "def" Spacing
+    "(" Spacing "rslt-sender" Spacing name:Atom ")" Spacing
+    body:FormList
+    ")" Spacing
+    { String b = body.trim(); yyValue = "rslt_sender " + name + " {\n" + (b.isEmpty() ? "" : "    " + b + "\n") + "}"; } ;
+
+String RsltReceiver =
+    "(" Spacing "def" Spacing
+    "(" Spacing "rslt-receiver" Spacing name:Atom ")" Spacing
+    body:FormList
+    ")" Spacing
+    { String b = body.trim(); yyValue = "rslt_receiver " + name + " {\n" + (b.isEmpty() ? "" : "    " + b + "\n") + "}"; } ;
+
+String DefWorker =
+    "(" Spacing "def" Spacing
+    "(" Spacing name:Atom params:AtomList ")" Spacing
+    "(" Spacing "wfn" Spacing ret:Atom types:AtomList ")" Spacing
+    body:Form
+    ")" Spacing
+    { String b = body.startsWith("{") ? body : "{\n    " + body.trim() + "\n}"; yyValue = "worker " + ret + " " + name + "(" + zipParams(params, types) + ") " + b; } ;
+
+String DefFunc =
+    "(" Spacing "def" Spacing
+    "(" Spacing "csym" Spacing "::" Spacing name:Atom params:AtomList ")" Spacing
+    "(" Spacing "fn" Spacing ret:TypeExpr types:TypeExprList ")" Spacing
+    body:Form
+    ")" Spacing
+    { yyValue = ret + " " + name + "(" + zipParams(params, types) + ") " + body; }
+  / "(" Spacing "def" Spacing
+    "(" Spacing name:Atom params:AtomList ")" Spacing
+    "(" Spacing "fn" Spacing ret:TypeExpr types:AtomList ")" Spacing
+    body:Form
+    ")" Spacing
+    { yyValue = ret + " " + name + "(" + zipParams(params, types) + ") " + body; } ;
+
+String TypeExpr =
+    "(" Spacing "array" Spacing t:TypeExpr n:Atom ")" Spacing { yyValue = t + "[" + n + "]"; }
+  / "(" Spacing "struct" Spacing n:Atom ")" Spacing           { yyValue = "struct " + n; }
+  / "(" Spacing "ptr" Spacing t:TypeExpr ")" Spacing          { yyValue = t + "*"; }
+  / h:[a-zA-Z_] t:[a-zA-Z0-9_]* Spacing                      { yyValue = h + flatten(t); } ;
+
+String TypeExprList =
+    t:TypeExpr rest:TypeExprList { yyValue = t + " " + rest; }
+  / /* empty */                  { yyValue = ""; } ;
+
+String Form =
+    IfForm
+  / BeginForm
+  / DoTwoForm
+  / ReturnForm
+  / DefVarForm
+  / AssignForm
+  / WhileForm
+  / ArefForm
+  / FrefForm
+  / CastForm
+  / IncrForm
+  / DecrForm
+  / CallForm
+  / Atom ;
+
+String FrefForm =
+    "(" Spacing "fref" Spacing obj:Form field:Atom ")" Spacing
+    { yyValue = obj + "." + field.replace("-", "_"); } ;
+
+String ArefForm =
+    "(" Spacing "aref" Spacing arr:Atom idx:Form ")" Spacing
+    { yyValue = arr + "[" + idx + "]"; } ;
+
+String CastForm =
+    "(" Spacing "cast" Spacing t:TypeAtom e:Form ")" Spacing
+    { yyValue = "(" + t + ")" + e; } ;
+
+String IncrForm =
+    "(" Spacing "++" Spacing e:Atom ")" Spacing
+    { yyValue = "++" + e; } ;
+
+String DecrForm =
+    "(" Spacing "--" Spacing e:Atom ")" Spacing
+    { yyValue = "--" + e; } ;
+
+String TypeAtom =
+    h:[a-zA-Z_] t:[a-zA-Z0-9_]* Spacing { yyValue = h + flatten(t); } ;
+
+String IfForm =
+    "(" Spacing "if" Spacing cond:Form then:Form els:Form ")" Spacing
+    { String t = then.startsWith("{") ? then : "{ " + then.trim() + " }";
+      String e = els.startsWith("{") ? els : "{ " + els.trim() + " }";
+      yyValue = "if (" + cond + ") " + t + " else " + e; }
+  / "(" Spacing "if" Spacing cond:Form then:Form ")" Spacing
+    { String t = then.startsWith("{") ? then : "{ " + then.trim() + " }";
+      yyValue = "if (" + cond + ") " + t; } ;
+
+String BeginForm =
+    "(" Spacing "begin" Spacing
+    { indentLevel++; }
+    stmts:FormList ")" Spacing
+    { indentLevel--;
+      StringBuilder sb = new StringBuilder();
+      sb.append("{\n");
+      for (String s : stmts.trim().split("\n(?=\\S)")) {
+        String t = s.trim();
+        if (!t.isEmpty()) sb.append(indent()).append("    ").append(t).append("\n");
+      }
+      sb.append(indent()).append("}");
+      yyValue = sb.toString(); } ;
+
+String DoTwoForm =
+    "(" Spacing "do-two" Spacing s1:Form s2:Form h:HandlesOpt ")" Spacing
+    { String ind = indent() + "    "; String ss1 = s1.trim().endsWith(";") ? s1.trim() : s1.trim() + ";"; String ss2 = s2.trim().endsWith(";") ? s2.trim() : s2.trim() + ";"; yyValue = "do_two\n" + ind + ss1 + "\n" + ind + ss2 + (h.isEmpty() ? "" : "\n" + indent() + h.trim()); } ;
+
+String HandlesOpt =
+    "(" Spacing "handles" Spacing name:Atom
+    "(" Spacing ":put" Spacing put:Form ")" Spacing
+    "(" Spacing ":get" Spacing get:Form ")" Spacing
+    ")" Spacing
+    { String ind = indent() + "    "; yyValue = "handles " + name + " {\n" + ind + "put: { " + put.replaceAll(";$","").trim() + "; }\n" + ind + "get: { " + get.replaceAll(";$","").trim() + "; }\n" + indent() + "}"; }
+  / /* empty */ { yyValue = ""; } ;
+
+String ReturnForm =
+    "(" Spacing "return" Spacing e:Form ")" Spacing
+    { yyValue = "return " + e + ";"; }
+  / "(" Spacing "return" Spacing ")" Spacing
+    { yyValue = "return;"; } ;
+
+String DefVarForm =
+    "(" Spacing "def" Spacing name:Atom type:Atom init:Form ")" Spacing
+    { yyValue = type + " " + name + " = " + init + ";"; }
+  / "(" Spacing "def" Spacing name:Atom type:Atom ")" Spacing
+    { yyValue = type + " " + name + ";"; } ;
+
+String AssignForm =
+    "(" Spacing "=" Spacing lhs:Atom rhs:Form ")" Spacing
+    { yyValue = lhs + " = " + rhs; } ;
+
+String WhileForm =
+    "(" Spacing "while" Spacing cond:Form body:Form ")" Spacing
+    { yyValue = "while (" + cond + ") " + body; } ;
+
+String CallForm =
+    "(" Spacing "csym" Spacing "::" Spacing name:Atom args:FormList ")" Spacing
+    { yyValue = name + "(" + args.trim().replace("\n", ", ") + ")"; }
+  / "(" Spacing name:Atom args:FormList ")" Spacing
+    { yyValue = name + "(" + args.trim().replace("\n", ", ") + ")"; } ;
+
+String BinopForm =
+    "(" Spacing op:BinOp l:Form r:Form ")" Spacing
+    { yyValue = l + " " + op + " " + r; } ;
+
+String BinOp =
+    "<=" Spacing { yyValue = "<="; }
+  / ">=" Spacing { yyValue = ">="; }
+  / "==" Spacing { yyValue = "=="; }
+  / "!=" Spacing { yyValue = "!="; }
+  / "<"  Spacing { yyValue = "<";  }
+  / ">"  Spacing { yyValue = ">";  }
+  / "+"  Spacing { yyValue = "+";  }
+  / "-"  Spacing { yyValue = "-";  }
+  / "*"  Spacing { yyValue = "*";  }
+  / "/"  Spacing { yyValue = "/";  } ;
+
+String FormList =
+    f:Form rest:FormList { yyValue = f + "\n" + rest; }
+  / /* empty */          { yyValue = ""; } ;
+
+String AtomList =
+    a:Atom rest:AtomList { yyValue = a + " " + rest; }
+  / /* empty */          { yyValue = ""; } ;
+
+String Atom =
+    BinopForm
+  / s:StringLit Spacing { yyValue = s; }
+  / "this" Spacing "." Spacing f:Atom { yyValue = "this." + f; }
+  / h:[a-zA-Z_] t:[a-zA-Z0-9_\-]* "." g:[a-zA-Z_] u:[a-zA-Z0-9_\-]* Spacing { yyValue = h + flatten(t) + "." + g + flatten(u); }
+  / h:[a-zA-Z_] t:[a-zA-Z0-9_\-]* Spacing { yyValue = h + flatten(t); }
+  / h:[0-9] t:[0-9]* "." d:[0-9]+ Spacing  { yyValue = h + flatten(t) + "." + flatten(d); }
+  / h:[0-9] t:[0-9]* Spacing               { yyValue = h + flatten(t); } ;
+
+String StringLit =
+    "\"" cs:StringChar* "\""
+    { StringBuilder sb = new StringBuilder("\"");
+      for (String c : cs.list()) sb.append(c);
+      sb.append("\"");
+      yyValue = sb.toString(); } ;
+
+String StringChar =
+    h:'\\' t:_ { yyValue = String.valueOf(h) + t; }
+  / h:(![\"\n] _) { yyValue = String.valueOf(h); } ;
+
+transient void Spacing = ([ \t\n\r] / Comment)* ;
+
+transient void Comment = ";;" (![\n\r] _)* "\n" ;
+
+transient void EOF = !_ ;

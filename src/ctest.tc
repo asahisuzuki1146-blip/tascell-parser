@@ -1,0 +1,16 @@
+int add(int a, int b) {
+    int result = a + b;
+    return result;
+}
+
+worker void loop(int n) {
+    int i = 0;
+    while (i < n) {
+        i = i + 1;
+    }
+    if (i == n) {
+        printf(i);
+    } else {
+        printf(0);
+    }
+}

@@ -1,0 +1,6 @@
+worker void hello(int n) {
+    do_two
+        printf(n);
+        printf(n);
+    hello(n);
+}

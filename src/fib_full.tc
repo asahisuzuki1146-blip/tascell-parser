@@ -1,0 +1,57 @@
+decl long fib(long n);
+
+long N0 = 0;
+
+double my_probability(int n) {
+    if (n < 20) {
+        return (double)n / 20.0;
+    } else {
+        return 1.0;
+    }
+}
+
+task fib {
+    in: long n;
+    out: long r;
+};
+
+task_body fib {
+    this.r = fib(this.n);
+}
+
+task fib_start {
+    in: long n;
+    out: long r;
+};
+
+task_body fib_start {
+    this.r = fib(this.n);
+}
+
+task_receiver fib {
+}
+
+task_sender fib {
+}
+
+rslt_sender fib {
+}
+
+rslt_receiver fib {
+}
+
+worker long fib(long n) {
+    if (n <= 2) {
+        return 1;
+    }
+    long s1;
+    long s2;
+    do_two
+        s1 = fib(n - 1);
+        s2 = fib(n - 2);
+    handles fib {
+        put: { this.n = n - 2; }
+        get: { s2 = this.r; }
+    }
+    return s1 + s2;
+}

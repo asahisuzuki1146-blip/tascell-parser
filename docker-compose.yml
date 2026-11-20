@@ -1,0 +1,11 @@
+services:
+  tascell-parser:
+    build: .
+    container_name: tascell-parser
+    # ホストの src/ フォルダをコンテナの /workspace にマウント
+    # → ホスト側でファイルを編集してコンテナで即実行できる
+    volumes:
+      - ./src:/workspace/src
+    working_dir: /workspace
+    stdin_open: true
+    tty: true

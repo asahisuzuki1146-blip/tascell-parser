@@ -1,0 +1,27 @@
+worker long nq(int n, int k, long *board) {
+    if (k == n) {
+        return 1;
+    }
+    long count = 0;
+    for (int i = 0; i < n; i + 1) {
+        int ok = 1;
+        for (int j = 0; j < k; j + 1) {
+            if (board[j] == i) {
+                ok = 0;
+            }
+            if (board[j] == i + (k - j)) {
+                ok = 0;
+            }
+            if (board[j] == i - (k - j)) {
+                ok = 0;
+            }
+        }
+        if (ok == 1) {
+            board[k] = i;
+            do_two
+                count = count + nq(n, k + 1, board);
+                count = count + nq(n, k + 1, board);
+        }
+    }
+    return count;
+}

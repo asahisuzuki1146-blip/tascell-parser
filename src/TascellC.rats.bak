@@ -1,0 +1,184 @@
+module TascellC;
+
+body {
+  private String flatten(xtc.util.Pair<Character> cs) {
+    StringBuilder sb = new StringBuilder();
+    for (char c : cs) sb.append(c);
+    return sb.toString();
+  }
+}
+
+public String start =
+    Spacing ds:TopDeclList EOF
+    { yyValue = ds; } ;
+
+String TopDeclList =
+    d:TopDecl rest:TopDeclList { yyValue = d + "\n" + rest; }
+  / /* empty */                { yyValue = ""; } ;
+
+String TopDecl =
+    WorkerDecl
+  / TaskExecDecl
+  / TaskDecl
+  / FuncDecl ;
+
+String WorkerDecl =
+    "worker" Spacing ret:TypeSpec name:Atom
+    "(" Spacing params:ParamList ")" Spacing
+    body:CompoundStmt
+    { yyValue = "(def (" + name + " " + params + ") (wfn " + ret + ")\n  " + body + ")"; } ;
+
+String TaskDecl =
+    "task" Spacing name:Atom "{" Spacing
+    fields:TaskFieldList
+    "}" Spacing ";" Spacing
+    { yyValue = "(deftask " + name + "\n" + fields + ")"; } ;
+
+String TaskFieldList =
+    f:TaskField rest:TaskFieldList { yyValue = f + rest; }
+  / /* empty */                   { yyValue = ""; } ;
+
+String TaskField =
+    dir:TaskDir t:TypeSpec n:Atom ";" Spacing
+    { yyValue = "  (" + dir + " " + t + " " + n + ")\n"; } ;
+
+String TaskDir =
+    "in"  Spacing ":" Spacing { yyValue = "in:"; }
+  / "out" Spacing ":" Spacing { yyValue = "out:"; }
+  / /* empty */               { yyValue = ""; } ;
+
+String TaskExecDecl =
+    "task_exec" Spacing name:Atom "{" Spacing
+    body:StmtList
+    "}" Spacing
+    { yyValue = "(task-exec " + name + "\n" + body + ")"; } ;
+
+String FuncDecl =
+    ret:TypeSpec name:Atom
+    "(" Spacing params:ParamList ")" Spacing
+    body:CompoundStmt
+    { yyValue = "(def (" + name + " " + params + ") (fn " + ret + ")\n  " + body + ")"; } ;
+
+String ParamList =
+    t:TypeSpec n:Atom "," Spacing rest:ParamList { yyValue = n + " (" + t + " " + n + ") " + rest; }
+  / t:TypeSpec n:Atom                            { yyValue = n; }
+  / /* empty */                                  { yyValue = ""; } ;
+
+String TypeSpec =
+    "void"   Spacing { yyValue = "void"; }
+  / "int"    Spacing { yyValue = "int"; }
+  / "long"   Spacing { yyValue = "long"; }
+  / "double" Spacing { yyValue = "double"; }
+  / "char"   Spacing { yyValue = "char"; }
+  / "float"  Spacing { yyValue = "float"; } ;
+
+String Stmt =
+    DoTwoStmt
+  / ParallelForStmt
+  / DynamicWindStmt
+  / IfStmt
+  / WhileStmt
+  / ReturnStmt
+  / VarDeclStmt
+  / CompoundStmt
+  / ExprStmt ;
+
+String DoTwoStmt =
+    "do_two" Spacing s1:Stmt s2:Stmt
+    { yyValue = "(do-two " + s1 + " " + s2 + ")"; } ;
+
+String ParallelForStmt =
+    "for" Spacing "(" Spacing "int" Spacing id:Atom
+    ":" Spacing from:Expr "," Spacing to:Expr ")" Spacing
+    body:Stmt
+    { yyValue = "(for " + id + " " + from + " " + to + " " + body + ")"; } ;
+
+String DynamicWindStmt =
+    "dynamic_wind" Spacing before:Stmt body:Stmt after:Stmt
+    { yyValue = "(dynamic-wind " + before + " " + body + " " + after + ")"; } ;
+
+String IfStmt =
+    "if" Spacing "(" Spacing cond:Expr ")" Spacing then:Stmt "else" Spacing els:Stmt
+    { yyValue = "(if " + cond + " " + then + " " + els + ")"; }
+  / "if" Spacing "(" Spacing cond:Expr ")" Spacing then:Stmt
+    { yyValue = "(if " + cond + " " + then + ")"; } ;
+
+String WhileStmt =
+    "while" Spacing "(" Spacing cond:Expr ")" Spacing body:Stmt
+    { yyValue = "(while " + cond + " " + body + ")"; } ;
+
+String ReturnStmt =
+    "return" Spacing e:Expr ";" Spacing { yyValue = "(return " + e + ")"; }
+  / "return" Spacing ";" Spacing        { yyValue = "(return)"; } ;
+
+String VarDeclStmt =
+    t:TypeSpec n:Atom "=" Spacing e:Expr ";" Spacing
+    { yyValue = "(def " + n + " " + t + " " + e + ")"; }
+  / t:TypeSpec n:Atom ";" Spacing
+    { yyValue = "(def " + n + " " + t + ")"; } ;
+
+String CompoundStmt =
+    "{" Spacing ss:StmtList "}" Spacing
+    { yyValue = "(begin " + ss + ")"; } ;
+
+String StmtList =
+    s:Stmt rest:StmtList { yyValue = s + " " + rest; }
+  / /* empty */          { yyValue = ""; } ;
+
+String ExprStmt =
+    e:Expr ";" Spacing
+    { yyValue = e; } ;
+
+String Expr = AssignExpr ;
+
+String AssignExpr =
+    lhs:Atom "=" Spacing rhs:CmpExpr
+    { yyValue = "(= " + lhs + " " + rhs + ")"; }
+  / CmpExpr ;
+
+String CmpExpr =
+    l:AddExpr op:CmpOp r:AddExpr
+    { yyValue = "(" + op + " " + l + " " + r + ")"; }
+  / AddExpr ;
+
+String CmpOp =
+    "<=" Spacing { yyValue = "<="; }
+  / ">=" Spacing { yyValue = ">="; }
+  / "<"  Spacing { yyValue = "<";  }
+  / ">"  Spacing { yyValue = ">";  }
+  / "==" Spacing { yyValue = "=="; }
+  / "!=" Spacing { yyValue = "!="; } ;
+
+String AddExpr =
+    l:MulExpr "+" Spacing r:AddExpr { yyValue = "(+ " + l + " " + r + ")"; }
+  / l:MulExpr "-" Spacing r:AddExpr { yyValue = "(- " + l + " " + r + ")"; }
+  / MulExpr ;
+
+String MulExpr =
+    l:Atom "*" Spacing r:MulExpr { yyValue = "(* " + l + " " + r + ")"; }
+  / l:Atom "/" Spacing r:MulExpr { yyValue = "(/ " + l + " " + r + ")"; }
+  / FuncCall
+  / Atom ;
+
+String FuncCall =
+    name:Atom "(" Spacing args:ArgList ")" Spacing
+    { yyValue = "(" + name + " " + args + ")"; } ;
+
+String ArgList =
+    a:Expr "," Spacing rest:ArgList { yyValue = a + " " + rest; }
+  / a:Expr                          { yyValue = a; }
+  / /* empty */                     { yyValue = ""; } ;
+
+String Atom =
+    "(" Spacing e:Expr ")" Spacing { yyValue = e; }
+  / h:[a-zA-Z_] t:[a-zA-Z0-9_]* Spacing { yyValue = h + flatten(t); }
+  / h:[0-9] t:[0-9]* Spacing            { yyValue = h + flatten(t); } ;
+
+transient void Spacing = ([ \t\n\r] / Comment)* ;
+
+transient void Comment =
+    "//" (![\n\r] _)* "\n"
+  / "/*" ('*' !'/' / !'*' _)* "*/"
+  ;
+
+transient void EOF = !_ ;
