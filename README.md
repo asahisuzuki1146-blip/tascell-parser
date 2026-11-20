@@ -44,7 +44,7 @@ java xtc.core.Tool --version
 | `/workspace/src/` | コンテナ内から見た同じフォルダ |
 | `/opt/superc/xtc/` | Rats!/xtc 本体（参照用） |
 
-##　使用手順
+## 使用手順
 以下の手順で環境を使えます
 
 ```bash
