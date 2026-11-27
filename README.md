@@ -78,7 +78,7 @@ java -cp $CLASSPATH:src Main < src/hello.tc
 
 ```
 (def (hello n) (wfn void int)
-  (begin (do-two (printf n) (printf n)) (hello n) ))
+  (begin (do-two (printf n) (printf n)) (hello n)))
 ```
 
 ### 拡張SC（S式）→ 拡張C
@@ -108,8 +108,40 @@ java -cp $CLASSPATH:src Main < src/fib.tc | java -cp $CLASSPATH:src SCMain
 | `fib_full.tc` | グローバル変数・確率関数込みの完全版フィボナッチ |
 | `nq.tc` | N クイーン問題（配列・ネストした for ループ） |
 | `ctest.tc` | 通常の C 関数 + worker 関数の混在 |
-| `ctest2.tc` | ポインタ・配列・文字列リテラルを含む worker (?)|
-| `task_test.tc` | `task` / `task_exec` の最小構成 (?)|
+| `ctest2.tc` | ポインタ・配列・文字列リテラルを含む worker |
+| `task_test.tc` | `task` / `task_exec` の最小構成 |
+
+### 変換の注意点
+
+- SC→C では、複合式を常に括弧付きで出力します（例：`(* 2 (+ a b))` → `2 * (a + b)`）。
+  文・条件・右辺・引数など外側の括弧が不要な位置では、一番外の括弧だけ外します。
+  そのため往復後の `.tc` は元より括弧が増えることがありますが、意味は変わりません。
+- 文字列中の `\n` は SC の `~%` に、`~` は `~~` に変換します（逆変換では元に戻します）。
+  対応しているエスケープは `\n` `\t` `\\` `\"` `\'` で、それ以外はパースエラーにします。
+- `*p` は `(mref p)`、`&x` は `(ptr x)` に変換します（SC の表記）。
+- `task_exec`（PPoPP 2009 §4.2 の構文）は、現行 sc-tascell の `(def (task-body name) ...)` に変換します。
+  `task-exec` という SC フォームは sc-tascell のルールに存在しないためです。
+  SC→C では `task_body` として出力します。
+- C の `x %= e` は `(= x (% x e))` に展開します。SC の `(%= ...)` は SC プリプロセッサの
+  `%` 指令と衝突して sc2c が受け付けないためです（`x` に副作用がある場合は 2 回評価されます）。
+- SC 側で未対応の形式（`do-many`、`dynamic-wind` の `:before` 形式など）は、関数呼び出しに
+  化けずにパースエラーになります。
+
+### テスト
+
+```bash
+SC_PREFIX=/opt/sc-tascell bash tests/run_tests.sh
+```
+
+次の 3 種類を自動で確認します。
+
+1. 往復変換：`src/*.tc` を C→SC→C→SC と変換し、SC が一致すること（元の `.tc` との差分も表示）。
+2. 意味の検証：`tests/expr.tc` を gcc で直接ビルドした実行結果を正解とし、
+   「C→SC→sc2c→gcc」と「C→SC→C→gcc」の実行結果が一致すること。
+3. Tascell：`src/fib_full.tc` を SC に変換してヘッダを付け、sc2c → gcc（ワーカランタイムとリンク）で
+   ビルドし、1・2・4 ワーカで `fib(30) = 832040` になること。
+
+作業ファイルは `tests/out/` に出力されます（sc-tascell のディレクトリは変更しません）。
 
 ### 自分で .tc ファイルを書くとき
 

@@ -1,343 +1,393 @@
+/*
+ * 拡張SC (S式) → 拡張C パーザ
+ *
+ * 方針:
+ *  - 複合式は常に括弧付きで出力する ((* 2 (+ a b)) → (2 * (a + b)))。
+ *    文・条件・右辺・引数・添字など、外側の括弧が不要な位置では一番外の括弧だけ外す。
+ *  - 型は TypeExpr で読み、宣言子のパターン ("int *@" の @ に名前が入る) を返す。
+ *  - def / fn / ptr などの予約語は関数名として受け付けない。
+ *    未知の特殊形式は関数呼び出しにならず、パースエラーになる。
+ *  - 識別子のハイフンは _ に変換する (fib-start → fib_start)。
+ *  - 文字列の ~% は \n、~~ は ~ に戻す。
+ */
 module SCParser;
 
 body {
-  private String flatten(xtc.util.Pair<Character> cs) {
+  private static String flatten(xtc.util.Pair<Character> cs) {
     StringBuilder sb = new StringBuilder();
     for (char c : cs) sb.append(c);
     return sb.toString();
   }
-  private int indentLevel = 0;
-  private String indent() {
-    StringBuilder sb = new StringBuilder();
-    for (int i = 0; i < indentLevel; i++) sb.append("    ");
-    return sb.toString();
+
+  /* SC のシンボル → C の識別子。-> はそのまま残す */
+  private static String toC(String sym) {
+    return sym.replaceAll("-(?!>)", "_");
   }
-  private String toC(String name) {
-    return name.replace("-", "_");
+
+  /* s 全体を囲む一番外の括弧を 1 組だけ外す。文字列・文字リテラル中の括弧は数えない */
+  private static String unparen(String s) {
+    String t = s.trim();
+    if (t.length() < 2 || t.charAt(0) != '(' || t.charAt(t.length() - 1) != ')') return t;
+    int depth = 0;
+    for (int i = 0; i < t.length(); i++) {
+      char c = t.charAt(i);
+      if (c == '"' || c == '\'') {
+        for (i++; i < t.length() && t.charAt(i) != c; i++) if (t.charAt(i) == '\\') i++;
+      } else if (c == '(') {
+        depth++;
+      } else if (c == ')') {
+        depth--;
+        if (depth == 0 && i != t.length() - 1) return t;  /* 先頭の ( が途中で閉じた */
+      }
+    }
+    return t.substring(1, t.length() - 1).trim();
   }
-  private String zipParams(String names, String types) {
-    String[] ns = names.trim().split("\\s+");
-    String[] ts = types.trim().split("\\s+");
-    if (names.trim().isEmpty()) return "";
+
+  /* 文として出力: ; または } で終わらなければ ; を補う */
+  private static String stmt(String s) {
+    String t = s.trim();
+    if (t.endsWith(";") || t.endsWith("}")) return t;
+    return unparen(t) + ";";
+  }
+
+  private static String stripSemi(String s) {
+    String t = s.trim();
+    return t.endsWith(";") ? t.substring(0, t.length() - 1).trim() : t;
+  }
+
+  private static String indent(String s) {
+    return "    " + s.replace("\n", "\n    ");
+  }
+
+  private static String block(xtc.util.Pair<String> ss) {
+    StringBuilder sb = new StringBuilder("{\n");
+    for (String s : ss) sb.append(indent(stmt(s))).append("\n");
+    return sb.append("}").toString();
+  }
+
+  /* 関数・ループ本体: 単一の { } ならそのまま、そうでなければブロックで包む */
+  private static String body(xtc.util.Pair<String> ss) {
+    if (ss.size() == 1 && ss.head().startsWith("{")) return ss.head();
+    return block(ss);
+  }
+
+  private static String asBlock(String s) {
+    return s.startsWith("{") ? s : "{\n" + indent(stmt(s)) + "\n}";
+  }
+
+  /* put/get 節: 1 文なら 1 行で書く */
+  private static String inlineBlock(xtc.util.Pair<String> ss) {
+    if (ss.size() == 1) {
+      String st = stmt(ss.head());
+      if (!st.contains("\n") && !st.startsWith("{")) return "{ " + st + " }";
+    }
+    return body(ss);
+  }
+
+  /* 宣言子パターン: @ の位置に名前を入れる */
+  private static String decl(String pat, String name) { return pat.replace("@", name); }
+
+  private static String ptrPat(String pat) {
+    return pat.contains("@[") ? pat.replace("@", "(*@)") : pat.replace("@", "*@");
+  }
+
+  /* キャスト用の型名: "int *@" → "int *", "long @" → "long" */
+  private static String typeName(String pat) {
+    return pat.replace("@", "").trim();
+  }
+
+  private static String params(xtc.util.Pair<String> names, xtc.util.Pair<String> types) {
     StringBuilder sb = new StringBuilder();
-    for (int i = 0; i < ns.length; i++) {
-      if (i > 0) sb.append(", ");
-      String t = i < ts.length ? ts[i] : "int";
-      sb.append(t).append(" ").append(ns[i]);
+    java.util.Iterator<String> ti = types.iterator();
+    boolean first = true;
+    for (String n : names) {
+      if (!first) sb.append(", ");
+      sb.append(decl(ti.next(), n));
+      first = false;
     }
     return sb.toString();
   }
+
+  private static String args(xtc.util.Pair<String> as) {
+    StringBuilder sb = new StringBuilder();
+    boolean first = true;
+    for (String a : as) {
+      if (!first) sb.append(", ");
+      sb.append(unparen(a));
+      first = false;
+    }
+    return sb.toString();
+  }
+
+  /* 多引数の二項演算を左畳み込みし、各段を括弧で囲む */
+  private static String fold(String op, String first, xtc.util.Pair<String> rest) {
+    String acc = first;
+    for (String r : rest) acc = "(" + acc + " " + op + " " + r + ")";
+    return acc;
+  }
+
+  /* 単項演算子の後ろに同じ記号が続くと ++ / -- になるので空白を挟む */
+  private static String prefix(String op, String e) {
+    return "(" + op + (e.startsWith(op) ? " " : "") + e + ")";
+  }
+
+  private static String join(xtc.util.Pair<String> xs, String sep) {
+    StringBuilder sb = new StringBuilder();
+    boolean first = true;
+    for (String x : xs) {
+      if (!first) sb.append(sep);
+      sb.append(x);
+      first = false;
+    }
+    return sb.toString();
+  }
+
+  /* 文字列中の 1 文字を C のリテラル表記にする */
+  private static String cChar(char c) {
+    switch (c) {
+      case '"':  return "\\\"";
+      case '\\': return "\\\\";
+      case '\n': return "\\n";
+      case '\t': return "\\t";
+      default:   return String.valueOf(c);
+    }
+  }
 }
 
-public String start =
-    Spacing ds:TopFormList EOF
-    { yyValue = ds.trim(); }
-  / Spacing f:Form EOF
-    { yyValue = f; } ;
+/* ------------------------------------------------------------------ */
+/* トップレベル                                                         */
+/* ------------------------------------------------------------------ */
 
-String TopFormList =
-    d:TopForm rest:TopFormList { yyValue = d + "\n\n" + rest; }
-  / /* empty */                { yyValue = ""; } ;
+public String start =
+    Spacing ds:TopForm* EOF { yyValue = join(ds, "\n\n"); } ;
 
 String TopForm =
-    DefWorker
-  / DefTask
-  / DefTaskBody
-  / DefTaskReceiver
-  / DefTaskSender
-  / RsltSender
-  / RsltReceiver
-  / TaskExecForm
-  / DeclForm
-  / GlobalVarDef
-  / DefFunc ;
-
-String GlobalVarDef =
-    "(" Spacing "def" Spacing name:Atom type:Atom init:Form ")" Spacing
-    { yyValue = type + " " + name + " = " + init + ";"; }
-  / "(" Spacing "def" Spacing name:Atom type:Atom ")" Spacing
-    { yyValue = type + " " + name + ";"; } ;
-
-String DeclForm =
-    "(" Spacing "decl" Spacing
-    "(" Spacing name:Atom params:AtomList ")" Spacing
-    "(" Spacing "wfn" Spacing ret:TypeExpr types:TypeExprList ")" Spacing
-    ")" Spacing
-    { yyValue = "decl " + ret + " " + toC(name) + "(" + zipParams(params, types) + ");"; }
-  / "(" Spacing "decl" Spacing name:Atom type:TypeExpr ")" Spacing
-    { yyValue = type + " " + name + ";"; } ;
+    DefTask
+  / DefSpecial
+  / DefFunction
+  / DeclFunction
+  / DeclVar
+  / DefVar ;
 
 String DefTask =
-    "(" Spacing "def" Spacing
-    "(" Spacing "task" Spacing name:Atom ")" Spacing
-    fields:TaskFieldList
-    ")" Spacing
-    { yyValue = "task " + name + " {\n" + fields + "};"; } ;
-
-String TaskFieldList =
-    f:TaskField rest:TaskFieldList { yyValue = f + rest; }
-  / /* empty */                   { yyValue = ""; } ;
+    LP "def" KW LP "task" KW name:Ident RP fs:TaskField* RP
+    { yyValue = "task " + name + " {\n" + join(fs, "") + "};"; } ;
 
 String TaskField =
-    "(" Spacing "def" Spacing n:Atom t:TypeExpr dir:TaskDir ")" Spacing
-    { yyValue = "    " + dir + " " + t + " " + n + ";\n"; } ;
+    LP "def" KW n:Ident t:TypeExpr d:TaskDir RP
+    { yyValue = "    " + d + decl(t, n) + ";\n"; } ;
 
 String TaskDir =
-    ":in"  Spacing { yyValue = "in:"; }
-  / ":out" Spacing { yyValue = "out:"; }
-  / /* empty */    { yyValue = ""; } ;
+    ":in"  KW     { yyValue = "in: ";  }
+  / ":out" KW     { yyValue = "out: "; }
+  / /* empty */   { yyValue = "";      } ;
 
-String DefTaskBody =
-    "(" Spacing "def" Spacing
-    "(" Spacing "task-body" Spacing name:Atom ")" Spacing
-    body:FormList
-    ")" Spacing
-    { String b = body.trim(); if (!b.endsWith(";")) b = b + ";"; yyValue = "task_body " + name + " {\n    " + b + "\n}"; } ;
+String DefSpecial =
+    LP "def" KW LP k:SpecialKind name:Ident RP bs:Form* RP
+    { yyValue = k + " " + name + " " + body(bs); } ;
 
-String DefTaskReceiver =
-    "(" Spacing "def" Spacing
-    "(" Spacing "task-receiver" Spacing name:Atom ")" Spacing
-    body:FormList
-    ")" Spacing
-    { String b = body.trim(); yyValue = "task_receiver " + name + " {\n" + (b.isEmpty() ? "" : "    " + b + "\n") + "}"; } ;
+String SpecialKind =
+    "task-body"     KW { yyValue = "task_body";     }
+  / "task-receiver" KW { yyValue = "task_receiver"; }
+  / "task-sender"   KW { yyValue = "task_sender";   }
+  / "rslt-sender"   KW { yyValue = "rslt_sender";   }
+  / "rslt-receiver" KW { yyValue = "rslt_receiver"; } ;
 
-String DefTaskSender =
-    "(" Spacing "def" Spacing
-    "(" Spacing "task-sender" Spacing name:Atom ")" Spacing
-    body:FormList
-    ")" Spacing
-    { String b = body.trim(); yyValue = "task_sender " + name + " {\n" + (b.isEmpty() ? "" : "    " + b + "\n") + "}"; } ;
+String DefFunction =
+    LP "def" KW LP name:FuncName ps:Ident* RP
+    LP k:FnKind ret:TypeExpr ts:TypeExpr* RP &{ ps.size() == ts.size() }
+    bs:Form* RP
+    { yyValue = k + decl(ret, name + "(" + params(ps, ts) + ")") + " " + body(bs); } ;
 
-String RsltSender =
-    "(" Spacing "def" Spacing
-    "(" Spacing "rslt-sender" Spacing name:Atom ")" Spacing
-    body:FormList
-    ")" Spacing
-    { String b = body.trim(); yyValue = "rslt_sender " + name + " {\n" + (b.isEmpty() ? "" : "    " + b + "\n") + "}"; } ;
+String DeclFunction =
+    LP "decl" KW LP name:FuncName ps:Ident* RP
+    LP k:FnKind ret:TypeExpr ts:TypeExpr* RP &{ ps.size() == ts.size() } RP
+    { yyValue = (k.isEmpty() ? "" : "decl ") + decl(ret, name + "(" + params(ps, ts) + ")") + ";"; } ;
 
-String RsltReceiver =
-    "(" Spacing "def" Spacing
-    "(" Spacing "rslt-receiver" Spacing name:Atom ")" Spacing
-    body:FormList
-    ")" Spacing
-    { String b = body.trim(); yyValue = "rslt_receiver " + name + " {\n" + (b.isEmpty() ? "" : "    " + b + "\n") + "}"; } ;
+String FnKind =
+    "wfn" KW { yyValue = "worker "; }
+  / "fn"  KW { yyValue = ""; } ;
 
-String TaskExecForm =
-    "(" Spacing "task-exec" Spacing name:Atom
-    body:FormList
-    ")" Spacing
-    { String b = body.trim(); yyValue = "task_exec " + name + " {\n" + (b.isEmpty() ? "" : "    " + b + "\n") + "}"; } ;
+String DeclVar =
+    LP "decl" KW n:Ident t:TypeExpr RP { yyValue = decl(t, n) + ";"; } ;
 
-String DefWorker =
-    "(" Spacing "def" Spacing
-    "(" Spacing name:Atom params:AtomList ")" Spacing
-    "(" Spacing "wfn" Spacing ret:TypeExpr types:TypeExprList ")" Spacing
-    body:Form
-    ")" Spacing
-    { String b = body.startsWith("{") ? body : "{\n    " + body.trim() + "\n}"; yyValue = "worker " + ret + " " + name + "(" + zipParams(params, types) + ") " + b; } ;
+String DefVar =
+    LP "def" KW n:Ident t:TypeExpr e:Form RP { yyValue = decl(t, n) + " = " + unparen(e) + ";"; }
+  / LP "def" KW n:Ident t:TypeExpr RP        { yyValue = decl(t, n) + ";"; } ;
 
-String DefFunc =
-    "(" Spacing "def" Spacing
-    "(" Spacing "csym" Spacing "::" Spacing name:Atom params:AtomList ")" Spacing
-    "(" Spacing "fn" Spacing ret:TypeExpr types:TypeExprList ")" Spacing
-    body:Form
-    ")" Spacing
-    { yyValue = ret + " " + name + "(" + zipParams(params, types) + ") " + body; }
-  / "(" Spacing "def" Spacing
-    "(" Spacing name:Atom params:AtomList ")" Spacing
-    "(" Spacing "fn" Spacing ret:TypeExpr types:AtomList ")" Spacing
-    body:Form
-    ")" Spacing
-    { yyValue = ret + " " + name + "(" + zipParams(params, types) + ") " + body; } ;
+String FuncName =
+    "csym" Spacing "::" Spacing n:Ident { yyValue = n; }
+  / Ident ;
+
+/* ------------------------------------------------------------------ */
+/* 型 (宣言子パターンを返す)                                             */
+/* ------------------------------------------------------------------ */
 
 String TypeExpr =
-    "(" Spacing "array" Spacing t:TypeExpr n:Atom ")" Spacing { yyValue = t + "[" + n + "]"; }
-  / "(" Spacing "struct" Spacing n:Atom ")" Spacing           { yyValue = "struct " + n; }
-  / "(" Spacing "ptr" Spacing t:TypeExpr ")" Spacing          { yyValue = t + "*"; }
-  / h:[a-zA-Z_] t:[a-zA-Z0-9_]* Spacing                      { yyValue = h + flatten(t); } ;
+    LP "ptr"    KW t:TypeExpr RP        { yyValue = ptrPat(t); }
+  / LP "array"  KW t:TypeExpr n:Form RP { yyValue = t.replace("@", "@[" + unparen(n) + "]"); }
+  / LP "struct" KW n:Ident RP           { yyValue = "struct " + n + " @"; }
+  / n:Ident                             { yyValue = n + " @"; } ;
 
-String TypeExprList =
-    t:TypeExpr rest:TypeExprList { yyValue = t + " " + rest; }
-  / /* empty */                  { yyValue = ""; } ;
+/* ------------------------------------------------------------------ */
+/* 文                                                                   */
+/* ------------------------------------------------------------------ */
 
-String Form =
-    IfForm
-  / BeginForm
-  / DoTwoForm
-  / ForForm
-  / ReturnForm
-  / DefVarForm
-  / AssignForm
+String Form = Statement / Expression ;
+
+String Statement =
+    BeginForm
+  / IfForm
   / WhileForm
-  / ArefForm
-  / FrefForm
-  / CastForm
-  / IncrForm
-  / DecrForm
-  / AddrForm
-  / DerefForm
-  / CallForm
-  / Atom ;
-
-String ForForm =
-    "(" Spacing "for" Spacing
-    "(" Spacing init:Form cond:Form step:Form ")" Spacing
-    body:Form
-    ")" Spacing
-    { yyValue = "for (" + init.replaceAll(";$","").trim() + "; " + cond.replaceAll(";$","").trim() + "; " + step.replaceAll(";$","").trim() + ") " + body; } ;
-
-String FrefForm =
-    "(" Spacing "fref" Spacing obj:Form field:Atom ")" Spacing
-    { yyValue = obj + "." + field.replace("-", "_"); } ;
-
-String ArefForm =
-    "(" Spacing "aref" Spacing arr:ArefForm idx:Form ")" Spacing
-    { yyValue = arr + "[" + idx + "]"; }
-  / "(" Spacing "aref" Spacing arr:Atom idx:Form ")" Spacing
-    { yyValue = arr + "[" + idx + "]"; } ;
-
-String CastForm =
-    "(" Spacing "cast" Spacing t:TypeAtom e:Form ")" Spacing
-    { yyValue = "(" + t + ")" + e; } ;
-
-String IncrForm =
-    "(" Spacing "++" Spacing e:Atom ")" Spacing
-    { yyValue = "++" + e; } ;
-
-String DecrForm =
-    "(" Spacing "--" Spacing e:Atom ")" Spacing
-    { yyValue = "--" + e; } ;
-
-String AddrForm =
-    "(" Spacing "addr" Spacing e:Form ")" Spacing
-    { yyValue = "&" + e; } ;
-
-String DerefForm =
-    "(" Spacing "deref" Spacing e:Form ")" Spacing
-    { yyValue = "*" + e; } ;
-
-String TypeAtom =
-    h:[a-zA-Z_] t:[a-zA-Z0-9_]* Spacing { yyValue = h + flatten(t); } ;
-
-String IfForm =
-    "(" Spacing "if" Spacing cond:Form then:Form els:Form ")" Spacing
-    { String t = then.startsWith("{") ? then : "{ " + then.trim() + " }";
-      String e = els.startsWith("{") ? els : "{ " + els.trim() + " }";
-      yyValue = "if (" + cond + ") " + t + " else " + e; }
-  / "(" Spacing "if" Spacing cond:Form then:Form ")" Spacing
-    { String t = then.startsWith("{") ? then : "{ " + then.trim() + " }";
-      yyValue = "if (" + cond + ") " + t; } ;
+  / ForForm
+  / DoTwoForm
+  / ReturnForm
+  / BreakForm
+  / ContinueForm
+  / DefVar ;
 
 String BeginForm =
-    "(" Spacing "begin" Spacing
-    { indentLevel++; }
-    stmts:FormList ")" Spacing
-    { indentLevel--;
-      StringBuilder sb = new StringBuilder();
-      sb.append("{\n");
-      for (String s : stmts.trim().split("\n(?=\\S)")) {
-        String t = s.trim();
-        if (t.isEmpty()) continue;
-        // ブロック末尾の文には ; を補う。ただしすでに ; がある、または
-        // 制御構造（do_two, if, while, for, {}ブロック）はセミコロン不要
-        boolean needsSemi = !t.endsWith(";") && !t.endsWith("}")
-            && !t.startsWith("do_two") && !t.startsWith("if ")
-            && !t.startsWith("while ") && !t.startsWith("for ");
-        sb.append(indent()).append("    ").append(t);
-        if (needsSemi) sb.append(";");
-        sb.append("\n");
-      }
-      sb.append(indent()).append("}");
-      yyValue = sb.toString(); } ;
+    LP "begin" KW bs:Form* RP { yyValue = block(bs); } ;
 
-String DoTwoForm =
-    "(" Spacing "do-two" Spacing s1:Form s2:Form h:HandlesOpt ")" Spacing
-    { String ind = indent() + "    "; String ss1 = s1.trim().endsWith(";") ? s1.trim() : s1.trim() + ";"; String ss2 = s2.trim().endsWith(";") ? s2.trim() : s2.trim() + ";"; yyValue = "do_two\n" + ind + ss1 + "\n" + ind + ss2 + (h.isEmpty() ? "" : "\n" + indent() + h.trim()); } ;
-
-String HandlesOpt =
-    "(" Spacing "handles" Spacing name:Atom
-    "(" Spacing ":put" Spacing put:Form ")" Spacing
-    "(" Spacing ":get" Spacing get:Form ")" Spacing
-    ")" Spacing
-    { String ind = indent() + "    "; yyValue = "handles " + name + " {\n" + ind + "put: { " + put.replaceAll(";$","").trim() + "; }\n" + ind + "get: { " + get.replaceAll(";$","").trim() + "; }\n" + indent() + "}"; }
-  / /* empty */ { yyValue = ""; } ;
-
-String ReturnForm =
-    "(" Spacing "return" Spacing e:Form ")" Spacing
-    { yyValue = "return " + e + ";"; }
-  / "(" Spacing "return" Spacing ")" Spacing
-    { yyValue = "return;"; } ;
-
-String DefVarForm =
-    "(" Spacing "def" Spacing name:Atom type:Atom init:Form ")" Spacing
-    { yyValue = type + " " + name + " = " + init + ";"; }
-  / "(" Spacing "def" Spacing name:Atom type:Atom ")" Spacing
-    { yyValue = type + " " + name + ";"; } ;
-
-String AssignForm =
-    "(" Spacing "=" Spacing lhs:ArefForm rhs:Form ")" Spacing
-    { yyValue = lhs + " = " + rhs; }
-  / "(" Spacing "=" Spacing lhs:DerefForm rhs:Form ")" Spacing
-    { yyValue = lhs + " = " + rhs; }
-  / "(" Spacing "=" Spacing lhs:Atom rhs:Form ")" Spacing
-    { yyValue = lhs + " = " + rhs; } ;
+String IfForm =
+    LP "if" KW c:Form t:Form e:Form RP
+    { yyValue = "if (" + unparen(c) + ") " + asBlock(t) + " else " + asBlock(e); }
+  / LP "if" KW c:Form t:Form RP
+    { yyValue = "if (" + unparen(c) + ") " + asBlock(t); } ;
 
 String WhileForm =
-    "(" Spacing "while" Spacing cond:Form body:Form ")" Spacing
-    { yyValue = "while (" + cond + ") " + body; } ;
+    LP "while" KW c:Form bs:Form* RP
+    { yyValue = "while (" + unparen(c) + ") " + body(bs); } ;
 
-String CallForm =
-    "(" Spacing "csym" Spacing "::" Spacing name:Atom args:FormList ")" Spacing
-    { yyValue = name + "(" + args.trim().replace("\n", ", ") + ")"; }
-  / "(" Spacing name:Atom args:FormList ")" Spacing
-    { yyValue = name + "(" + args.trim().replace("\n", ", ") + ")"; } ;
+String ForForm =
+    LP "for" KW LP i:ForPart c:ForPart s:ForPart RP bs:Form* RP
+    { yyValue = "for (" + i + "; " + c + "; " + s + ") " + body(bs); } ;
 
-String BinopForm =
-    "(" Spacing op:BinOp l:Form r:Form ")" Spacing
-    { yyValue = l + " " + op + " " + r; } ;
+String ForPart =
+    LP RP    { yyValue = ""; }
+  / f:Form   { yyValue = unparen(stripSemi(f)); } ;
+
+String DoTwoForm =
+    LP "do-two" KW s1:Form s2:Form h:Handles? RP
+    { yyValue = "do_two\n" + indent(stmt(s1)) + "\n" + indent(stmt(s2))
+                + (h == null ? "" : "\n" + h); } ;
+
+String Handles =
+    LP "handles" KW name:Ident
+    LP ":put" KW ps:Form* RP
+    LP ":get" KW gs:Form* RP
+    RP
+    { yyValue = "handles " + name + " {\n"
+                + indent("put: " + inlineBlock(ps)) + "\n"
+                + indent("get: " + inlineBlock(gs)) + "\n}"; } ;
+
+String ReturnForm =
+    LP "return" KW e:Form RP { yyValue = "return " + unparen(e) + ";"; }
+  / LP "return" KW RP        { yyValue = "return;"; } ;
+
+String BreakForm    = LP "break"    KW RP { yyValue = "break;";    } ;
+String ContinueForm = LP "continue" KW RP { yyValue = "continue;"; } ;
+
+/* ------------------------------------------------------------------ */
+/* 式 (複合式はすべて括弧付き)                                           */
+/* ------------------------------------------------------------------ */
+
+String Expression =
+    LP "=" KW l:Form r:Form RP          { yyValue = "(" + l + " = " + unparen(r) + ")"; }
+  / LP op:CAssignOp l:Form r:Form RP    { yyValue = "(" + l + " " + op + " " + unparen(r) + ")"; }
+  / LP "aref"  KW a:Form is:Form+ RP
+    { String acc = a; for (String i : is) acc = acc + "[" + unparen(i) + "]"; yyValue = acc; }
+  / LP "fref"  KW o:Form f:Ident RP     { yyValue = o + "." + f; }
+  / LP "cast"  KW t:TypeExpr e:Form RP  { yyValue = "((" + typeName(t) + ")" + e + ")"; }
+  / LP "inc"   KW e:Form RP             { yyValue = "(" + e + "++)"; }
+  / LP "dec"   KW e:Form RP             { yyValue = "(" + e + "--)"; }
+  / LP "++"    KW e:Form RP             { yyValue = prefix("++", e); }
+  / LP "--"    KW e:Form RP             { yyValue = prefix("--", e); }
+  / LP "ptr"   KW e:Form RP             { yyValue = prefix("&", e); }
+  / LP "mref"  KW e:Form RP             { yyValue = prefix("*", e); }
+  / LP "exps"  KW es:Form+ RP           { yyValue = "(" + args(es) + ")"; }
+  / LP "not"   KW e:Form RP             { yyValue = prefix("!", e); }
+  / LP "and"   KW a:Form rs:Form+ RP    { yyValue = fold("&&", a, rs); }
+  / LP "or"    KW a:Form rs:Form+ RP    { yyValue = fold("||", a, rs); }
+  / LP op:BinOp a:Form rs:Form+ RP      { yyValue = fold(op, a, rs); }
+  / LP "-"     KW a:Form RP             { yyValue = prefix("-", a); }
+  / LP n:FuncName as:Form* RP           { yyValue = n + "(" + args(as) + ")"; }
+  / StringLit
+  / Number
+  / Ident ;
+
+String CAssignOp =
+    "+=" KW { yyValue = "+="; }
+  / "-=" KW { yyValue = "-="; }
+  / "*=" KW { yyValue = "*="; }
+  / "/=" KW { yyValue = "/="; } ;
 
 String BinOp =
-    "<=" Spacing { yyValue = "<="; }
-  / ">=" Spacing { yyValue = ">="; }
-  / "==" Spacing { yyValue = "=="; }
-  / "!=" Spacing { yyValue = "!="; }
-  / "<"  Spacing { yyValue = "<";  }
-  / ">"  Spacing { yyValue = ">";  }
-  / "+"  Spacing { yyValue = "+";  }
-  / "-"  Spacing { yyValue = "-";  }
-  / "*"  Spacing { yyValue = "*";  }
-  / "/"  Spacing { yyValue = "/";  } ;
+    "<=" KW { yyValue = "<="; }
+  / ">=" KW { yyValue = ">="; }
+  / "==" KW { yyValue = "=="; }
+  / "!=" KW { yyValue = "!="; }
+  / "<"  KW { yyValue = "<";  }
+  / ">"  KW { yyValue = ">";  }
+  / "+"  KW { yyValue = "+";  }
+  / "-"  KW { yyValue = "-";  }
+  / "*"  KW { yyValue = "*";  }
+  / "/"  KW { yyValue = "/";  }
+  / "%"  KW { yyValue = "%";  } ;
 
-String FormList =
-    f:Form rest:FormList { yyValue = f + "\n" + rest; }
-  / /* empty */          { yyValue = ""; } ;
+/* ------------------------------------------------------------------ */
+/* 字句                                                                 */
+/* ------------------------------------------------------------------ */
 
-String AtomList =
-    a:Atom rest:AtomList { yyValue = a + " " + rest; }
-  / /* empty */          { yyValue = ""; } ;
+String Ident =
+    !Reserved h:[a-zA-Z_] t:[a-zA-Z0-9_\-.>]* !SymChar Spacing
+    { yyValue = toC(h + flatten(t)); } ;
 
-String Atom =
-    BinopForm
-  / s:StringLit Spacing { yyValue = s; }
-  / "this" Spacing "." Spacing f:Atom { yyValue = "this." + f; }
-  / h:[a-zA-Z_] t:[a-zA-Z0-9_\-]* "." g:[a-zA-Z_] u:[a-zA-Z0-9_\-]* Spacing { yyValue = h + flatten(t) + "." + g + flatten(u); }
-  / h:[a-zA-Z_] t:[a-zA-Z0-9_\-]* Spacing { yyValue = h + flatten(t); }
-  / h:[0-9] t:[0-9]* "." d:[0-9]+ Spacing  { yyValue = h + flatten(t) + "." + flatten(d); }
-  / h:[0-9] t:[0-9]* Spacing               { yyValue = h + flatten(t); } ;
+String Number =
+    s:"-"? h:[0-9] t:[0-9]* f:Fraction? x:Exponent? !SymChar Spacing
+    { yyValue = (s == null ? "" : "-") + h + flatten(t)
+                + (f == null ? "" : f) + (x == null ? "" : x); } ;
 
+String Fraction = "." d:[0-9]+ { yyValue = "." + flatten(d); } ;
+String Exponent = e:[eE] s:[+\-]? d:[0-9]+
+    { yyValue = String.valueOf(e) + (s == null ? "" : String.valueOf(s)) + flatten(d); } ;
+
+/* SC の文字列 (Lisp の \ エスケープ + format の ~% ~~) → C の文字列リテラル */
 String StringLit =
-    "\"" cs:StringChar* "\""
-    { StringBuilder sb = new StringBuilder("\"");
-      for (String c : cs.list()) sb.append(c);
-      sb.append("\"");
-      yyValue = sb.toString(); } ;
+    "\"" cs:SChar* "\"" Spacing { yyValue = "\"" + join(cs, "") + "\""; } ;
 
-String StringChar =
-    h:'\\' t:_ { yyValue = String.valueOf(h) + t; }
-  / h:(![\"\n] _) { yyValue = String.valueOf(h); } ;
+String SChar =
+    '\\' c:_          { yyValue = cChar(c); }
+  / "~%"              { yyValue = "\\n"; }
+  / "~~"              { yyValue = "~"; }
+  / c:(![\"\\~] _)    { yyValue = cChar(c); } ;
+
+/* 関数名・変数名として使えない語 (未知の特殊形式を呼び出し扱いしないため) */
+transient void Reserved =
+    "def" !SymChar / "decl" !SymChar / "fn" !SymChar / "wfn" !SymChar
+  / "ptr" !SymChar / "array" !SymChar / "struct" !SymChar / "cast" !SymChar
+  / "if" !SymChar / "begin" !SymChar / "for" !SymChar / "while" !SymChar
+  / "return" !SymChar / "break" !SymChar / "continue" !SymChar
+  / "do-two" !SymChar / "do-many" !SymChar / "handles" !SymChar
+  / "dynamic-wind" !SymChar
+  / "aref" !SymChar / "fref" !SymChar / "addr" !SymChar / "deref" !SymChar / "mref" !SymChar
+  / "inc" !SymChar / "dec" !SymChar / "not" !SymChar / "and" !SymChar / "or" !SymChar
+  / "task" !SymChar / "task-body" !SymChar / "task-sender" !SymChar / "task-receiver" !SymChar
+  / "rslt-sender" !SymChar / "rslt-receiver" !SymChar / "task-exec" !SymChar
+  / "let" !SymChar / "exps" !SymChar / "if-exp" !SymChar / "switch" !SymChar
+  / "c-exp" !SymChar / "csym" !SymChar ;
+
+transient void LP = "(" Spacing ;
+transient void RP = ")" Spacing ;
+
+/* キーワードの後の単語境界 */
+transient void KW = !SymChar Spacing ;
+transient void SymChar = !Delim _ ;
+transient void Delim = ' ' / '\t' / '\n' / '\r' / '(' / ')' / '"' / ';' ;
 
 transient void Spacing = ([ \t\n\r] / Comment)* ;
 
-transient void Comment = ";;" (![\n\r] _)* "\n" ;
+/* ; から行末までがコメント (;; も含む) */
+transient void Comment = ";" (![\n\r] _)* ;
 
 transient void EOF = !_ ;
