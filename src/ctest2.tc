@@ -1,6 +1,6 @@
 worker void test(int n, char *msg, int *arr) {
     printf("start: %s\n", msg);
-    for (int i = 0; i < n; i + 1) {
+    for (int i = 0; i < n; i++) {
         arr[i] = i;
     }
     int *p = &arr[0];

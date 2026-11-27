@@ -1,0 +1,88 @@
+/* 式・文の意味が変換で変わらないことを確かめるテスト。
+ * gcc で直接コンパイルした結果を正解とし、
+ *   (1) 拡張C → SC → sc2c → gcc
+ *   (2) 拡張C → SC → 拡張C → gcc
+ * の出力と一致することを確認する。 */
+
+int sub3(int a, int b, int c) {
+    return a - b - c;
+}
+
+int divmul(int a, int b, int c) {
+    return a / b * c;
+}
+
+int twice(int x) {
+    return x * 2;
+}
+
+int nested(int i, int k, int j) {
+    return i - (k - j) + 2 * (i + j) - (i - k) * (j - i) / 3 % 5;
+}
+
+int negate(int x) {
+    return -x;
+}
+
+int logic(int a, int b) {
+    return !a && b || a % 2 != 0 && !(b > 3);
+}
+
+double avg(int a, int b) {
+    return (double)(a + b) / 2.0;
+}
+
+int loops(int n) {
+    int s = 0;
+    int longest = 0;
+    int return_val = 0;
+    int integer = 1;
+    for (int i = 0; i < n; i++) {
+        if (i % 3 == 0) {
+            continue;
+        }
+        s += i;
+        integer *= 2;
+        if (s > 40) {
+            break;
+        }
+    }
+    while (longest < 5) {
+        longest++;
+        ++return_val;
+    }
+    longest -= 1;
+    s %= 7;
+    return s * 1000 + longest * 100 + return_val * 10 + integer % 10;
+}
+
+int ptrs(int v) {
+    int x = v;
+    int *p = &x;
+    int **pp = &p;
+    **pp = **pp + 1;
+    *p = *p * 3;
+    return x;
+}
+
+int edges(int u, int v) {
+    int a = u - -v;
+    int b = u - --v;
+    int c = u + ++v;
+    return a * 10000 + b * 100 + c;
+}
+
+int main() {
+    printf("sub3 %d\n", sub3(10, 3, 2));
+    printf("divmul %d\n", divmul(12, 3, 2));
+    printf("twice %d\n", twice(21) * 2);
+    printf("nested %d\n", nested(7, 4, 2));
+    printf("negate %d %d\n", negate(5), -negate(-3) - -1);
+    printf("logic %d %d %d %d\n", logic(0, 1), logic(1, 0), logic(3, 5), logic(2, 2));
+    printf("avg %.2f\n", avg(3, 4));
+    printf("loops %d\n", loops(20));
+    printf("ptrs %d\n", ptrs(4));
+    printf("edges %d\n", edges(9, 4));
+    printf("str [tab]\t[tilde]~ [quote]\" [bs]\\ 100%%\n");
+    return 0;
+}
